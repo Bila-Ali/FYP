@@ -38,7 +38,6 @@ from remediate import (
     remediate, prescan, file_hash, build_report,
     THREAT_ACTIONS
 )
-from dataset_loader import load_and_preprocess, train_test_split as dl_split
 
 # forensic_report is imported lazily (needs reportlab — optional)
 
@@ -49,7 +48,6 @@ from dataset_loader import load_and_preprocess, train_test_split as dl_split
 APP_DIR     = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR   = os.path.join(APP_DIR, "models")
 METRICS_FILE= os.path.join(MODEL_DIR, "metrics.json")
-CSV_PATH    = os.path.join(APP_DIR, "meragedatacsv.csv")
 
 # Feature order that matches training (from compare_models.py / predict.py)
 FEATURE_ORDER = [
@@ -162,7 +160,7 @@ for key, val in [
         st.session_state[key] = val
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — ML  (uses YOUR compare_models.py / dataset_loader.py functions)
+# HELPERS — ML  (uses pre‑trained models from models/ folder)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _safe_float(v, d=0.0):
@@ -193,7 +191,7 @@ def _build_vector(feat: dict) -> np.ndarray:
 @st.cache_resource(show_spinner=False)
 def load_models():
     """
-    Load models saved by compare_models.py or train_from_csv().
+    Load pre‑trained models from models/ folder.
     Falls back to heuristic synthetic models if none found.
     Returns (rf, iso, scaler, imputer).
     """
@@ -449,99 +447,6 @@ def vt_check(sha256: str, api_key: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — TRAINING  (uses YOUR dataset_loader.py + compare_models.py)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def train_from_csv(csv_path: str, callback=None) -> dict:
-    """
-    Load CSV using dataset_loader.load_and_preprocess(),
-    then train models using compare_models.run_supervised() logic.
-    Saves models to models/ folder.
-    """
-    from sklearn.ensemble import RandomForestClassifier, IsolationForest
-    from sklearn.tree import DecisionTreeClassifier
-    from sklearn.svm import SVC
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.impute import SimpleImputer
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-    import joblib
-
-    def cb(msg, step):
-        if callback: callback(msg, step)
-        else: print(f"  [{step}] {msg}")
-
-    cb("Loading dataset with dataset_loader.py ...", 1)
-    features, labels, feat_names = load_and_preprocess(csv_path)
-    counts = Counter(labels)
-    cb(f"Loaded {len(labels)} samples — {counts[1]} malicious / {counts[0]} benign", 2)
-
-    # Convert list-of-dicts to numpy array in FEATURE_ORDER
-    cb("Converting features to arrays ...", 3)
-    X = np.array([[_safe_float(f.get(col, 0)) for col in FEATURE_ORDER]
-                  for f in features], dtype=np.float32)
-    y = np.array(labels, dtype=np.int32)
-
-    cb("Imputing + scaling ...", 4)
-    imputer = SimpleImputer(strategy="median")
-    X = imputer.fit_transform(X)
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-
-    # Stratified split
-    from compare_models import stratified_split
-    X_tr, y_tr, X_te, y_te = stratified_split(X, y)
-    cb(f"Train: {len(y_tr)}  Test: {len(y_te)}", 5)
-
-    Path(MODEL_DIR).mkdir(parents=True, exist_ok=True)
-    results = {}
-    metrics = {}
-
-    model_defs = {
-        "RandomForest": RandomForestClassifier(n_estimators=200, max_features="sqrt",
-                        class_weight="balanced", random_state=42, n_jobs=-1),
-        "DecisionTree": DecisionTreeClassifier(max_depth=15, min_samples_split=5,
-                        class_weight="balanced", random_state=42),
-        "SVM":          SVC(kernel="rbf", C=10, gamma="scale",
-                        class_weight="balanced", probability=True, random_state=42),
-    }
-
-    for i, (name, model) in enumerate(model_defs.items(), 6):
-        cb(f"Training {name} ...", i)
-        model.fit(X_tr, y_tr)
-        preds = model.predict(X_te)
-        metrics[name] = {
-            "accuracy":  round(accuracy_score(y_te, preds) * 100, 2),
-            "precision": round(precision_score(y_te, preds, zero_division=0) * 100, 2),
-            "recall":    round(recall_score(y_te, preds, zero_division=0) * 100, 2),
-            "f1":        round(f1_score(y_te, preds, zero_division=0) * 100, 2),
-        }
-        results[name] = model
-
-    cb("Training Isolation Forest ...", 9)
-    iso = IsolationForest(n_estimators=200, contamination=0.1, random_state=42, n_jobs=-1)
-    iso.fit(X_tr)
-    results["IsolationForest"] = iso
-
-    cb("Saving models ...", 10)
-    joblib.dump(results["RandomForest"], os.path.join(MODEL_DIR, "rf_model.pkl"))
-    joblib.dump(results["DecisionTree"], os.path.join(MODEL_DIR, "dt_model.pkl"))
-    joblib.dump(results["SVM"],          os.path.join(MODEL_DIR, "svm_model.pkl"))
-    joblib.dump(iso,                     os.path.join(MODEL_DIR, "isolation_forest.pkl"))
-    joblib.dump(scaler,                  os.path.join(MODEL_DIR, "scaler.pkl"))
-    joblib.dump(imputer,                 os.path.join(MODEL_DIR, "imputer.pkl"))
-
-    best = max(metrics, key=lambda k: metrics[k]["f1"])
-    metrics["best_model"]    = best
-    metrics["dataset_info"]  = {"total_samples": int(len(y)),
-                                 "malicious": int(counts[1]), "benign": int(counts[0]),
-                                 "feature_count": X.shape[1]}
-    with open(METRICS_FILE, "w") as f:
-        json.dump(metrics, f, indent=2)
-
-    return metrics
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # HELPERS — HTML REPORT  (for download in scan page)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -646,7 +551,6 @@ with st.sidebar:
     for page_id, icon, label in [
         ("dashboard",    "📊", "Overview"),
         ("scan",         "🔬", "Scan PDF"),
-        ("training",     "🧠", "Model Training"),
         ("threat_intel", "🌐", "Threat Intel"),
         ("history",      "📋", "History"),
         ("settings",     "⚙️",  "Settings"),
@@ -672,7 +576,7 @@ with st.sidebar:
         st.markdown("""
         <div style="background:rgba(9,22,40,.6);border-radius:16px;padding:16px;border:1px solid #ffc30044">
           <div style="color:#ffc300;font-size:.7rem;text-transform:uppercase">⚠️ No trained models</div>
-          <div style="font-size:.75rem;margin-top:6px">Go to Model Training →</div>
+          <div style="font-size:.75rem;margin-top:6px">Place models in the 'models/' folder</div>
         </div>""", unsafe_allow_html=True)
 
     st.markdown("<div style='margin-top:20px;font-size:.7rem;color:#4d9fff;text-transform:uppercase;letter-spacing:1px'>VirusTotal API Key</div>", unsafe_allow_html=True)
@@ -996,88 +900,6 @@ elif page == "scan":
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: TRAINING  (uses YOUR dataset_loader.py + compare_models.py)
-# ─────────────────────────────────────────────────────────────────────────────
-
-elif page == "training":
-    st.markdown("""
-    <div style="margin-bottom:28px">
-      <div style="font-size:1.6rem;font-weight:700;background:linear-gradient(135deg,#fff,#4d9fff);-webkit-background-clip:text;background-clip:text;color:transparent">🧠 Model Training</div>
-      <div style="color:#8ba0c0;margin-top:6px">Trains using <b>dataset_loader.py</b> + <b>compare_models.py</b> on your <b>meragedatacsv.csv</b></div>
-    </div>""", unsafe_allow_html=True)
-
-    csv_exists = os.path.isfile(CSV_PATH)
-    st.markdown(f"""
-    <div class="kpi-grid">
-      <div class="kpi-card {'success' if csv_exists else 'critical'}">
-        <div class="kpi-label">Dataset CSV</div>
-        <div class="kpi-value" style="font-size:1.2rem">{"✅ Found" if csv_exists else "❌ Missing"}</div>
-        <div class="kpi-sub">meragedatacsv.csv</div>
-      </div>
-      <div class="kpi-card info"><div class="kpi-label">Expected Samples</div><div class="kpi-value">19,133</div><div class="kpi-sub">PDFMalware2022 dataset</div></div>
-      <div class="kpi-card info"><div class="kpi-label">Features</div><div class="kpi-value">31</div><div class="kpi-sub">PDF structural features</div></div>
-      <div class="kpi-card info"><div class="kpi-label">Models</div><div class="kpi-value">4</div><div class="kpi-sub">RF · DT · SVM · IsoForest</div></div>
-    </div>""", unsafe_allow_html=True)
-
-    if not csv_exists:
-        st.error(f"meragedatacsv.csv not found at: {CSV_PATH}")
-        st.stop()
-
-    if st.button("🚀 Train Models on meragedatacsv.csv", disabled=not csv_exists):
-        pb   = st.progress(0)
-        stat = st.empty()
-        logs = []
-        log_box = st.empty()
-
-        def cb(msg, step):
-            pb.progress(min(100, int(step / 10 * 100)))
-            stat.markdown(f"**{msg}**")
-            logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-            log_box.code("\n".join(logs[-8:]), language=None)
-
-        try:
-            metrics = train_from_csv(CSV_PATH, cb)
-            pb.progress(100); stat.empty(); log_box.empty()
-            load_models.clear()
-            st.success("✅ Training complete! Models saved to models/")
-
-            best = metrics.get("best_model","?")
-            st.markdown('<div class="panel"><div class="panel-title">📊 Model Performance on Test Set</div>', unsafe_allow_html=True)
-            rows = ""
-            for name in ["RandomForest","DecisionTree","SVM"]:
-                r = metrics.get(name,{})
-                is_best = name == best
-                clr = "#00d4aa" if is_best else "#a0aec0"
-                rows += f"<tr><td style='color:{clr};font-weight:{'700' if is_best else '400'}'>{name} {'⭐' if is_best else ''}</td><td style='color:#00d4aa'>{r.get('accuracy','?')}%</td><td style='color:#4d9fff'>{r.get('precision','?')}%</td><td style='color:#ffc300'>{r.get('recall','?')}%</td><td>{r.get('f1','?')}%</td></tr>"
-            ds = metrics.get("dataset_info",{})
-            st.markdown(f'<table class="dash-table"><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th></tr>{rows}</table><div style="margin-top:12px;font-size:.75rem;color:#5a7a9a">Dataset: {ds.get("total_samples","?")} samples | {ds.get("malicious","?")} malicious | {ds.get("benign","?")} benign | {ds.get("feature_count","?")} features</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Training failed: {e}")
-
-    existing = load_metrics()
-    if existing:
-        best = existing.get("best_model","")
-        st.markdown('<div class="panel" style="margin-top:16px"><div class="panel-title">📈 Current Saved Model Performance</div>', unsafe_allow_html=True)
-        for name, r in existing.items():
-            if name in ("best_model","dataset_info","IsolationForest") or not isinstance(r, dict) or "accuracy" not in r: continue
-            is_best = name == best
-            clr = "#00d4aa" if is_best else "#a0aec0"
-            st.markdown(f'<div class="model-row"><span style="color:{clr};font-weight:{"700" if is_best else "400"}">{name} {"⭐" if is_best else ""}</span><span>Acc: {r["accuracy"]}%</span><span>Pre: {r["precision"]}%</span><span>Rec: {r["recall"]}%</span><span>F1: {r["f1"]}%</span></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="panel"><div class="panel-title">ℹ️ What happens when you click Train</div>', unsafe_allow_html=True)
-    st.markdown("""
-    1. **`dataset_loader.load_and_preprocess()`** — loads `meragedatacsv.csv`, encodes text/header columns
-    2. **`compare_models.stratified_split()`** — 80/20 stratified train/test split
-    3. Trains **Random Forest**, **Decision Tree**, **SVM** (supervised) + **Isolation Forest** (unsupervised)
-    4. Saves `.pkl` model files to `models/` folder
-    5. Saves `models/metrics.json` with accuracy/precision/recall/F1
-    """, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # PAGE: THREAT INTEL
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1121,7 +943,7 @@ elif page == "threat_intel":
         st.markdown("""
         <table class="dash-table">
           <tr><th>Service</th><th>Free?</th><th>Key?</th></tr>
-          <tr><td>MalwareBazaar</td><td style="color:#00d4aa">✅ Free</td><td>❌ Not needed</td></tr>
+          <tr><td>MalwareBazaar</td><td style="color:#00d4aa">✅ Free</td><td style="color:#00d4aa">❌ Not needed</td></tr>
           <tr><td>VirusTotal</td><td style="color:#00d4aa">✅ Free tier</td><td style="color:#ffc300">⚠️ Required</td></tr>
         </table>
         <div style="margin-top:12px;font-size:.75rem">Get free VT key: <a href="https://www.virustotal.com/gui/join-us" target="_blank" style="color:#4d9fff">virustotal.com/gui/join-us</a></div>
@@ -1184,13 +1006,10 @@ elif page == "settings":
     st.markdown(f"""
     <table class="dash-table">
       <tr><th>Component</th><th>Status</th><th>Details</th></tr>
-      <tr><td>meragedatacsv.csv</td><td style="color:{'#00d4aa' if os.path.isfile(CSV_PATH) else '#ff4d6d'}">{"✅ Found" if os.path.isfile(CSV_PATH) else "❌ Missing"}</td><td>{CSV_PATH}</td></tr>
-      <tr><td>Trained Models</td><td style="color:{'#00d4aa' if m else '#ffc300'}">{"✅ Ready" if m else "⚠️ Not trained"}</td><td>{"Best: " + m.get("best_model","?") if m else "Run Model Training first"}</td></tr>
+      <tr><td>Trained Models</td><td style="color:{'#00d4aa' if m else '#ffc300'}">{"✅ Ready" if m else "⚠️ Not found"}</td><td>{"Best: " + m.get("best_model","?") if m else "Place models in models/ folder"}</td></tr>
       <tr><td>feature_extractor.py</td><td style="color:#00d4aa">✅ Loaded</td><td>extract_features(), FEATURE_COLUMNS</td></tr>
       <tr><td>remediate.py</td><td style="color:#00d4aa">✅ Loaded</td><td>remediate(), prescan(), build_report()</td></tr>
-      <tr><td>dataset_loader.py</td><td style="color:#00d4aa">✅ Loaded</td><td>load_and_preprocess()</td></tr>
-      <tr><td>compare_models.py</td><td style="color:#00d4aa">✅ Loaded</td><td>stratified_split()</td></tr>
       <tr><td>forensic_report.py</td><td style="color:#4d9fff">ℹ️ Lazy loaded</td><td>generate_report() — on demand in Scan tab</td></tr>
-      <tr><td>VirusTotal</td><td style="color:{'#00d4aa' if st.session_state.vt_api_key else '#ffc300'}">{"✅ Key set" if st.session_state.vt_api_key else "⚠️ No key"}</td><td>Free tier: 4 req/min</td></tr>
+      <tr><td>VirusTotal Key</td><td style="color:{'#00d4aa' if st.session_state.vt_api_key else '#ffc300'}">{"✅ Key set" if st.session_state.vt_api_key else "⚠️ No key"}</td><td>Free tier: 4 req/min</td></tr>
     </table>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)

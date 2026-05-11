@@ -1,0 +1,27 @@
+{
+  "RandomForest": {
+    "accuracy": 99.66,
+    "precision": 99.46,
+    "recall": 99.37,
+    "f1": 99.42
+  },
+  "DecisionTree": {
+    "accuracy": 99.43,
+    "precision": 99.01,
+    "recall": 99.01,
+    "f1": 99.01
+  },
+  "SVM": {
+    "accuracy": 98.93,
+    "precision": 98.11,
+    "recall": 98.2,
+    "f1": 98.16
+  },
+  "best_model": "RandomForest",
+  "dataset_info": {
+    "total_samples": 19132,
+    "malicious": 5557,
+    "benign": 13575,
+    "feature_count": 31
+  }
+}

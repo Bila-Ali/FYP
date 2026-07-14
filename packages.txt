@@ -1,0 +1,8 @@
+# OS-level packages for Streamlit Community Cloud (Debian-based build image).
+# pikepdf and yara-python normally ship prebuilt manylinux wheels on PyPI,
+# so this file is often NOT needed. Only add these lines if your deploy log
+# shows a build/compile error for pikepdf or yara-python:
+#
+# libqpdf-dev
+# libyara-dev
+# qpdf

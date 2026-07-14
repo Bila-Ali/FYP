@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Project-specific — do not commit raw datasets or scratch test files
+dataset/
+*.csv
+!artifacts/*.csv
+sample_pdfs/
+tmp/
+*.log

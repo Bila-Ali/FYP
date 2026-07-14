@@ -1,0 +1,24 @@
+# ══════════════════════════════════════════════════════════════════════════
+# PDF Malware Detection Suite — Python dependencies
+# MUET BS Cyber Security · FYP
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── GUI (app.py) ─────────────────────────────────────────────────────────
+streamlit>=1.35,<2.0
+pandas>=2.0,<3.0
+numpy>=1.24,<2.0
+plotly>=5.20,<6.0
+
+# ── ML model (train_final_model.py / predict_pdf.py) ───────────────────────
+scikit-learn>=1.3,<2.0
+joblib>=1.3,<2.0
+shap>=0.45,<1.0                # SHAP explainability (Phase I)
+
+# ── PDF parsing / forensics / CDR (pdf_forensic_v2.py, pdf_cdr_v4.py) ──────
+pikepdf>=8.0,<10.0             # PDF structural parsing + CDR rebuild
+yara-python>=4.3,<5.0          # YARA rule matching
+
+# ── Feature extraction (extract_features.py) ────────────────────────────
+# Add any extras your extract_features.py / tools/ subfolder imports that
+# aren't listed above (e.g. PyPDF2, pdfminer.six, python-magic) — these
+# weren't visible to me since only app.py was uploaded.
